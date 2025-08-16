@@ -1,3 +1,10 @@
+#
+# File: test_sapi_tts.py
+# Description: Test script for Windows SAPI text-to-speech engine functionality
+# Author: Rushi Banekar
+# Date: 2025-08-16
+#
+
 import win32com.client
 
 def test_sapi_tts():

@@ -1,3 +1,10 @@
+#
+# File: enroll_voice.py
+# Description: Voice enrollment script for speaker recognition and voice authentication
+# Author: Rushi Banekar
+# Date: 2025-08-16
+#
+
 import os, pickle, time
 import numpy as np
 import sounddevice as sd
