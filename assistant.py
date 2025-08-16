@@ -2,7 +2,7 @@
 # File: assistant.py
 # Description: Main voice assistant module with AI integration, wake word detection, and API endpoints
 # Author: Rushi Banekar
-# Date: 2025-08-16
+# Date: 16-August-2025
 #
 
 import pyautogui
