@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Voice Assistant</title>
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>My Voice Assistant</h1>
+        <div id="animation-container">
+            <div class="listening-indicator"></div>
+        </div>
+        <div class="buttons">
+            <button id="startButton">Start Listening</button>
+            <button id="stopButton" disabled>Stop Listening</button>
+        </div>
+        <div id="status">Not listening.</div>
+        <button id="showHistoryBtn" style="margin:12px 0;">Conversation History</button>
+        <!-- Modal Chatbox -->
+        <div id="chatbox-modal" style="display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.5); z-index:999; align-items:center; justify-content:center;">
+            <div style="background:#fff; color:#111; border-radius:12px; width:95vw; max-width:480px; min-height:320px; max-height:80vh; display:flex; flex-direction:column;">
+                <div style="padding:10px 16px; border-bottom:1px solid #eee; display:flex; justify-content:space-between; align-items:center;">
+                    <span style="font-weight:bold;">Conversation History</span>
+                    <button id="closeChatboxBtn" style="font-size:20px; background:none; border:none; cursor:pointer;">&times;</button>
+                </div>
+                <div id="chatbox-content" style="flex:1; padding:10px; overflow-y:auto;"></div>
+            </div>
+        </div>
+
+    </div>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
