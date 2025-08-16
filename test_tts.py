@@ -1,3 +1,10 @@
+#
+# File: test_tts.py
+# Description: Test script for text-to-speech engine configuration and functionality
+# Author: Rushi Banekar
+# Date: 16-August-2025
+#
+
 import pyttsx3
 import yaml
 

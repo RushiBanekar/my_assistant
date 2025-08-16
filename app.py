@@ -1,3 +1,10 @@
+#
+# File: app.py
+# Description: Flask web application serving as the frontend interface for the voice assistant
+# Author: Rushi Banekar
+# Date: 16-August-2025
+#
+
 import webbrowser
 import time
 import os
