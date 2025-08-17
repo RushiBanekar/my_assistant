@@ -107,8 +107,8 @@ if __name__ == "__main__":
         print("[WARNING] Backend API is not running. Please start it first.")
         print("[INFO] Run: python assistant.py --mode api --port 5001")
     
-    # Check if the reloader is NOT active
-    if os.environ.get('WERKZEUG_RUN_MAIN') != 'true':
+    # Only auto-open browser if not launched by unified launcher
+    if os.environ.get('WERKZEUG_RUN_MAIN') != 'true' and not os.environ.get('SYLVIA_UNIFIED_LAUNCH'):
         Thread(target=open_browser).start()
     
     app.run(host='127.0.0.1', port=5000, debug=True)
