@@ -324,6 +324,11 @@ def start_word_dictation():
         # Create new document (Ctrl+N)
         pyautogui.hotkey('ctrl', 'n')
         time.sleep(2)
+
+        pyautogui.press('enter')
+        time.sleep(1)
+        pyautogui.press('enter')
+        time.sleep(1)
         
         speak("The file is ready... what do you want to write?")
         
@@ -719,6 +724,62 @@ def get_ai_response(prompt):
         print(f"ERROR: AI API call failed: {e}")
         sys.stdout.flush()
         return {"text": f"I'm having trouble connecting to my brain. Error: {str(e)}"}
+
+def get_custom_response(user_input):
+    """
+    Returns a custom response for specific user inputs.
+    Add your custom if/else statements here for personalized responses.
+    """
+    user_input = user_input.lower().strip()
+    
+    # Personal greetings and questions
+    if user_input in ["how are you", "how are you doing", "how's it going"]:
+        return "I'm doing great! Ready to help you with anything you need."
+    
+    elif user_input in ["what's your name", "who are you", "what are you"]:
+        return "I'm Sylvia, your voice assistant. I can help you with WhatsApp messages, Chrome automation, web searches, and much more!"
+    
+    elif user_input in ["good morning", "good afternoon", "good evening"]:
+        return "Good day to you too! How can I assist you today?"
+    
+    elif user_input in ["thank you", "thanks", "thank you sylvia"]:
+        return "You're very welcome! I'm always happy to help."
+    
+    elif user_input in ["what can you do", "what are your features", "help"]:
+        return "I can send WhatsApp messages, open websites in Chrome, search the web, get Wikipedia information, open applications, and much more. Just ask me naturally!"
+    
+    elif user_input in ["what time is it", "current time", "time"]:
+        from datetime import datetime
+        current_time = datetime.now().strftime("%I:%M %p")
+        return f"The current time is {current_time}."
+    
+    elif user_input in ["what's the date", "today's date", "date"]:
+        from datetime import datetime
+        current_date = datetime.now().strftime("%B %d, %Y")
+        return f"Today is {current_date}."
+    
+    elif user_input in ["good job", "well done", "great work"]:
+        return "Thank you! I'm glad I could help you successfully."
+    
+    elif user_input in ["you're smart", "you're intelligent", "clever"]:
+        return "Thank you for the kind words! I try my best to be helpful and efficient."
+    
+    # Fun responses
+    elif user_input in ["tell me a joke", "joke", "make me laugh"]:
+        return "Why don't scientists trust atoms? Because they make up everything!"
+    
+    elif user_input in ["sing a song", "sing something"]:
+        return "I'm better at helping you with tasks than singing, but here's my attempt: 'I'm Sylvia, your assistant true, here to help with all you do!'"
+    
+    elif user_input in ["who is your creator", "who created you", "created you"]:
+        return "My creator is Rushi Banekar."
+    
+    # Word dictation feature
+    elif "write something in word" in user_input or "dictate to word" in user_input or "word dictation" in user_input:
+        return start_word_dictation()
+    
+    # Return None if no custom response found
+    return None
 
 def run_assistant():
     """Main loop for the voice assistant."""
