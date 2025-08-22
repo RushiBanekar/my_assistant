@@ -19,12 +19,12 @@ import wikipedia
 import google.generativeai as genai
 from dotenv import load_dotenv
 import sys # Import the sys module
-from flask import Flask, jsonify, request
 from threading import Thread
 import pvporcupine
 from pvrecorder import PvRecorder
 import struct
 import pythoncom
+import argparse
 
 # Load environment variables
 load_dotenv()
@@ -79,59 +79,32 @@ WAKE_WORD = config.get("assistant", {}).get("wake_word", "sylvia").lower() # Ens
 VOICE_ID = config.get("assistant", {}).get("voice_id", None)
 MICROPHONE_ENERGY_THRESHOLD = config.get("assistant", {}).get("microphone_energy_threshold", 700) # Get from config
 
-# Initialize TTS engine
-engine = pyttsx3.init()
-if VOICE_ID:
-    print(f"[DEBUG] Attempting to set voice to ID from config: {VOICE_ID}")
-    sys.stdout.flush()
-    try:
-        engine.setProperty('voice', VOICE_ID)
-        current_voice = engine.getProperty('voice')
-        if current_voice != VOICE_ID:
-            print(f"[WARNING] Requested voice ID {VOICE_ID} was not fully set. Current voice: {current_voice}")
-            sys.stdout.flush()
-    except Exception as e:
-        print(f"[ERROR] Failed to set voice to {VOICE_ID}: {e}")
-        sys.stdout.flush()
-        print("[DEBUG] Falling back to default voice selection due to error.")
-        sys.stdout.flush()
-        VOICE_ID = None # Force fallback if setting fails
-if not VOICE_ID: # This block now runs if VOICE_ID was None initially or failed to set
-    voices = engine.getProperty('voices')
-    if voices:
-        print("[DEBUG] No specific VOICE_ID set or failed to set. Listing available voices:")
-        sys.stdout.flush()
-        en_voices = []
-        for i, voice in enumerate(voices):
-            # Check if voice.languages is not None and contains any string starting with 'en'
-            print(f"  Voice {i}: ID='{voice.id}', Name='{voice.name}', Languages='{voice.languages}'")
-            sys.stdout.flush()
-            if voice.languages and any(lang.lower().startswith('en') for lang in voice.languages):
-                en_voices.append(voice.id)
 
+def speak(text):
+    """Converts text to speech using the TTS engine and flushes output. TTS engine is initialized per call for reliability."""
+    import pyttsx3
+    print(f"Assistant: {text}")
+    sys.stdout.flush()
+    engine = pyttsx3.init()
+    voices = engine.getProperty('voices')
+    # Prefer configured voice, else prefer English/Zira, else fallback
+    selected_voice_id = None
+    if VOICE_ID:
+        try:
+            engine.setProperty('voice', VOICE_ID)
+            selected_voice_id = VOICE_ID
+        except Exception:
+            selected_voice_id = None
+    if not selected_voice_id and voices:
+        en_voices = [v.id for v in voices if v.languages and any(lang.lower().startswith('en') for lang in v.languages)]
         if en_voices:
-            # Prefer Zira if available and English, otherwise pick first English
             zira_voice_id = next((vid for vid in en_voices if "zira" in vid.lower()), None)
             if zira_voice_id:
                 engine.setProperty('voice', zira_voice_id)
-                print(f"[DEBUG] Selected Zira (English) voice: {zira_voice_id}")
-                sys.stdout.flush()
             else:
                 engine.setProperty('voice', en_voices[0])
-                print(f"[DEBUG] Selected first available English voice: {en_voices[0]}")
-                sys.stdout.flush()
         else:
-            engine.setProperty('voice', voices[0].id) # Fallback to first available voice
-            print(f"[DEBUG] No English voices found. Selected first available voice: {voices[0].id}")
-            sys.stdout.flush()
-    else:
-        print("No voices found. Text-to-speech might not work.")
-        sys.stdout.flush()
-
-def speak(text):
-    """Converts text to speech using the TTS engine and flushes output."""
-    print(f"Assistant: {text}")
-    sys.stdout.flush() # Ensure this message is displayed immediately
+            engine.setProperty('voice', voices[0].id)
     engine.say(text)
     engine.runAndWait()
 
@@ -152,8 +125,8 @@ def listen_for_command():
             r.adjust_for_ambient_noise(source, duration=0.3)
             
             try:
-                # Extended timeout (2 minutes) to reduce terminal scrolling
-                audio = r.listen(source, timeout=120, phrase_time_limit=8)
+                # Shorter timeout for better responsiveness in API mode
+                audio = r.listen(source, timeout=5, phrase_time_limit=8)
                 
                 command = r.recognize_google(audio, language='en-in').lower()
                 print(f"You said: {command}")
@@ -304,66 +277,86 @@ def chrome_refresh():
     """Refreshes current page in Chrome."""
     try:
         pyautogui.press('f5')  # Refresh shortcut
-        time.sleep(0.5)
         return "Refreshing current page"
     except Exception as e:
         return f"Failed to refresh page: {e}"
 
-def get_custom_response(user_input):
+def start_word_dictation():
     """
-    Returns a custom response for specific user inputs.
-    Add your custom if/else statements here for personalized responses.
+    Opens a blank Word document and starts dictation mode.
+    Continues listening and typing until user says 'end'.
     """
-    user_input = user_input.lower().strip()
+    try:
+        # Open Word application
+        speak("Opening Word document for dictation...")
+        open_application("word")
+        
+        # Wait for Word to open
+        time.sleep(3)
+        
+        # Create new document (Ctrl+N)
+        pyautogui.hotkey('ctrl', 'n')
+        time.sleep(2)
+
+        pyautogui.press('enter')
+        time.sleep(1)
+        pyautogui.press('enter')
+        time.sleep(1)
+        
+        speak("The file is ready... what do you want to write?")
+        
+        # Start dictation loop
+        dictation_text = []
+        while True:
+            try:
+                # Listen for dictation
+                command = listen_for_command()
+                
+                if command in ["no_speech_detected", "speech_unintelligible", "speech_service_error"]:
+                    continue
+                
+                # Check for end command
+                if "end" in command.lower():
+                    speak("Dictation completed. Your document is ready.")
+                    break
+                
+                # Type the dictated text
+                if command:
+                    # Add proper punctuation and formatting
+                    formatted_text = format_dictation_text(command)
+                    pyautogui.write(formatted_text + " ")
+                    dictation_text.append(formatted_text)
+                    print(f"[DICTATION] Added: {formatted_text}")
+                    
+            except Exception as e:
+                print(f"[ERROR] Dictation error: {e}")
+                speak("Sorry, there was an error. Please try again.")
+                break
+                
+        return f"Dictation session completed. Total words written: {len(' '.join(dictation_text).split())}"
+        
+    except Exception as e:
+        print(f"[ERROR] Word dictation failed: {e}")
+        return "Sorry, I couldn't start Word dictation. Please make sure Microsoft Word is installed."
+
+def format_dictation_text(text):
+    """
+    Formats dictated text with proper capitalization and punctuation.
+    """
+    # Capitalize first letter
+    text = text.strip()
+    if text:
+        text = text[0].upper() + text[1:]
     
-    # Personal greetings and questions
-    if user_input in ["how are you", "how are you doing", "how's it going"]:
-        return "I'm doing great! Ready to help you with anything you need."
+    # Handle common punctuation commands
+    text = text.replace(" period", ".")
+    text = text.replace(" comma", ",")
+    text = text.replace(" question mark", "?")
+    text = text.replace(" exclamation mark", "!")
+    text = text.replace(" new line", "\n")
+    text = text.replace(" new paragraph", "\n\n")
     
-    elif user_input in ["what's your name", "who are you", "what are you"]:
-        return "I'm Sylvia, your voice assistant. I can help you with WhatsApp messages, Chrome automation, web searches, and much more!"
-    
-    elif user_input in ["good morning", "good afternoon", "good evening"]:
-        return "Good day to you too! How can I assist you today?"
-    
-    elif user_input in ["thank you", "thanks", "thank you sylvia"]:
-        return "You're very welcome! I'm always happy to help."
-    
-    elif user_input in ["what can you do", "what are your features", "help"]:
-        return "I can send WhatsApp messages, open websites in Chrome, search the web, get Wikipedia information, open applications, and much more. Just ask me naturally!"
-    
-    elif user_input in ["what time is it", "current time", "time"]:
-        from datetime import datetime
-        current_time = datetime.now().strftime("%I:%M %p")
-        return f"The current time is {current_time}."
-    
-    elif user_input in ["what's the date", "today's date", "date"]:
-        from datetime import datetime
-        current_date = datetime.now().strftime("%B %d, %Y")
-        return f"Today is {current_date}."
-    
-    elif user_input in ["good job", "well done", "great work"]:
-        return "Thank you! I'm glad I could help you successfully."
-    
-    elif user_input in ["you're smart", "you're intelligent", "clever"]:
-        return "Thank you for the kind words! I try my best to be helpful and efficient."
-    
-    # Fun responses
-    elif user_input in ["tell me a joke", "joke", "make me laugh"]:
-        return "Why don't scientists trust atoms? Because they make up everything!"
-    
-    elif user_input in ["sing a song", "sing something"]:
-        return "I'm better at helping you with tasks than singing, but here's my attempt: 'I'm Sylvia, your assistant true, here to help with all you do!'"
-    
-    elif user_input in ["who is your creator", "who created you", "created you"]:
-        return "My creator and GOD is Rushi Banekar."
-    
-    # Add more custom responses here as needed
-    # elif user_input in ["your custom phrase", "another phrase"]:
-    #     return "Your custom response here"
-    
-    # Return None if no custom response found
-    return None
+    return text
 
 def get_wikipedia_info(query):
     """Searches Wikipedia for a query and returns a summary."""
@@ -398,27 +391,151 @@ def search_web(query):
         return "Sorry, I am unable to perform a web search at this time."
 
 def open_application(app_name):
-    """Opens a specified application."""
+    """Opens a specified application with comprehensive Windows app support."""
     try:
         if platform.system() == "Windows":
             # Handle common application names with specific paths
             app_name_lower = app_name.lower()
             
-            # Common application mappings for Windows
+            # Comprehensive application mappings for Windows
             app_paths = {
+                # Communication Apps
                 "whatsapp": [
                     os.path.expandvars(r"C:\Users\%USERNAME%\AppData\Local\WhatsApp\WhatsApp.exe"),
-                    "whatsapp:",  # URI scheme fallback
-                    "WhatsApp"    # Generic name fallback
+                    "whatsapp:",
+                    "WhatsApp"
                 ],
-                "chrome": ["chrome", "google chrome"],
-                "firefox": ["firefox"],
+                "discord": [
+                    os.path.expandvars(r"C:\Users\%USERNAME%\AppData\Local\Discord\Update.exe"),
+                    os.path.expandvars(r"C:\Users\%USERNAME%\AppData\Roaming\Discord\Discord.exe"),
+                    "discord"
+                ],
+                "telegram": [
+                    os.path.expandvars(r"C:\Users\%USERNAME%\AppData\Roaming\Telegram Desktop\Telegram.exe"),
+                    "telegram"
+                ],
+                "skype": ["skype", "lync"],
+                "zoom": [
+                    os.path.expandvars(r"C:\Users\%USERNAME%\AppData\Roaming\Zoom\bin\Zoom.exe"),
+                    "zoom"
+                ],
+                "teams": [
+                    os.path.expandvars(r"C:\Users\%USERNAME%\AppData\Local\Microsoft\Teams\current\Teams.exe"),
+                    "ms-teams:",
+                    "teams"
+                ],
+                
+                # Web Browsers
+                "chrome": [
+                    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                    "chrome"
+                ],
+                "firefox": [
+                    r"C:\Program Files\Mozilla Firefox\firefox.exe",
+                    r"C:\Program Files (x86)\Mozilla Firefox\firefox.exe",
+                    "firefox"
+                ],
+                "edge": ["msedge", "microsoft-edge:"],
+                "opera": ["opera"],
+                "brave": [
+                    os.path.expandvars(r"C:\Users\%USERNAME%\AppData\Local\BraveSoftware\Brave-Browser\Application\brave.exe"),
+                    "brave"
+                ],
+                
+                # Development Tools
+                "vscode": [
+                    os.path.expandvars(r"C:\Users\%USERNAME%\AppData\Local\Programs\Microsoft VS Code\Code.exe"),
+                    r"C:\Program Files\Microsoft VS Code\Code.exe",
+                    "code"
+                ],
+                "visual studio": [
+                    r"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\devenv.exe",
+                    r"C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\Common7\IDE\devenv.exe",
+                    "devenv"
+                ],
+                "pycharm": [
+                    os.path.expandvars(r"C:\Users\%USERNAME%\AppData\Local\JetBrains\Toolbox\apps\PyCharm-P\ch-0\*\bin\pycharm64.exe"),
+                    "pycharm"
+                ],
+                "sublime": [
+                    r"C:\Program Files\Sublime Text\sublime_text.exe",
+                    "sublime_text"
+                ],
+                "atom": ["atom"],
+                "git bash": [
+                    r"C:\Program Files\Git\git-bash.exe",
+                    "git-bash"
+                ],
+                
+                # Office Applications
+                "word": ["winword", "WINWORD.EXE"],
+                "excel": ["excel", "EXCEL.EXE"],
+                "powerpoint": ["powerpnt", "POWERPNT.EXE"],
+                "outlook": ["outlook", "OUTLOOK.EXE"],
+                "onenote": ["onenote"],
+                
+                # Media & Entertainment
+                "spotify": [
+                    os.path.expandvars(r"C:\Users\%USERNAME%\AppData\Roaming\Spotify\Spotify.exe"),
+                    "spotify"
+                ],
+                "vlc": [
+                    r"C:\Program Files\VideoLAN\VLC\vlc.exe",
+                    r"C:\Program Files (x86)\VideoLAN\VLC\vlc.exe",
+                    "vlc"
+                ],
+                "media player": ["wmplayer"],
+                "photos": ["ms-photos:"],
+                "movies": ["ms-xboxvideo:"],
+                "music": ["mswindowsmusic:"],
+                
+                # System Tools
                 "notepad": ["notepad"],
                 "calculator": ["calc"],
                 "paint": ["mspaint"],
                 "explorer": ["explorer"],
+                "file explorer": ["explorer"],
                 "cmd": ["cmd"],
-                "powershell": ["powershell"]
+                "command prompt": ["cmd"],
+                "powershell": ["powershell"],
+                "task manager": ["taskmgr"],
+                "control panel": ["control"],
+                "settings": ["ms-settings:"],
+                "registry": ["regedit"],
+                "device manager": ["devmgmt.msc"],
+                "disk management": ["diskmgmt.msc"],
+                "services": ["services.msc"],
+                "event viewer": ["eventvwr"],
+                "system info": ["msinfo32"],
+                "character map": ["charmap"],
+                "snipping tool": ["snippingtool"],
+                "screenshot": ["ms-screenclip:"],
+                
+                # Gaming
+                "steam": [
+                    r"C:\Program Files (x86)\Steam\steam.exe",
+                    "steam"
+                ],
+                "epic games": [
+                    os.path.expandvars(r"C:\Users\%USERNAME%\AppData\Local\EpicGamesLauncher\Portal\Binaries\Win32\EpicGamesLauncher.exe"),
+                    "epicgameslauncher"
+                ],
+                "xbox": ["ms-xboxlive:"],
+                
+                # Utilities
+                "7zip": [
+                    r"C:\Program Files\7-Zip\7zFM.exe",
+                    r"C:\Program Files (x86)\7-Zip\7zFM.exe"
+                ],
+                "winrar": [
+                    r"C:\Program Files\WinRAR\WinRAR.exe",
+                    r"C:\Program Files (x86)\WinRAR\WinRAR.exe"
+                ],
+                "adobe reader": ["AcroRd32"],
+                "pdf reader": ["AcroRd32"],
+                "teamviewer": ["teamviewer"],
+                "anydesk": ["anydesk"]
             }
             
             # Check if it's a known app with specific paths
@@ -433,31 +550,43 @@ def open_application(app_name):
                             # Try URI scheme
                             os.startfile(path)
                             return f"Opening {app_name}."
+                        elif path.endswith('.msc'):
+                            # Try MMC snap-in
+                            subprocess.run(["mmc", path], check=True)
+                            return f"Opening {app_name}."
                         else:
-                            # Try generic name
+                            # Try generic name or command
                             os.startfile(path)
                             return f"Opening {app_name}."
                     except:
                         continue
+                
                 # If all specific paths failed, try the original name
-                os.startfile(app_name)
+                try:
+                    os.startfile(app_name)
+                    return f"Opening {app_name}."
+                except:
+                    return f"Sorry, I couldn't find {app_name}. It might not be installed or accessible."
             else:
-                # Try opening with the original name
-                os.startfile(app_name)
+                # Try opening with the original name for unknown apps
+                try:
+                    os.startfile(app_name)
+                    return f"Opening {app_name}."
+                except:
+                    return f"Sorry, I couldn't find the application '{app_name}'. Try saying the exact application name or check if it's installed."
                 
         elif platform.system() == "Darwin": # macOS
             subprocess.run(["open", "-a", app_name], check=True)
         else: # Linux
             subprocess.run(["xdg-open", app_name], check=True)
             
-        return f"Opening {app_name}."
         
     except FileNotFoundError:
         return f"Sorry, I couldn't find the application '{app_name}'. Try saying the exact application name or check if it's installed."
     except Exception as e:
         print(f"Error opening application {app_name}: {e}")
         sys.stdout.flush()
-        return f"Sorry, I could not open {app_name}. Error: {str(e)}"
+        return f"Sorry, I encountered an error while trying to open {app_name}. Error: {str(e)}"
 
 # Define the functions available as tools for the AI model
 tools = [
@@ -569,13 +698,69 @@ def get_ai_response(prompt):
         sys.stdout.flush()
         return {"text": f"I'm having trouble connecting to my brain. Error: {str(e)}"}
 
+def get_custom_response(user_input):
+    """
+    Returns a custom response for specific user inputs.
+    Add your custom if/else statements here for personalized responses.
+    """
+    user_input = user_input.lower().strip()
+    
+    # Personal greetings and questions
+    if user_input in ["how are you", "how are you doing", "how's it going"]:
+        return "I'm doing great! Ready to help you with anything you need."
+    
+    elif user_input in ["what's your name", "who are you", "what are you"]:
+        return "I'm Sylvia, your voice assistant. I can help you with WhatsApp messages, Chrome automation, web searches, and much more!"
+    
+    elif user_input in ["good morning", "good afternoon", "good evening"]:
+        return "Good day to you too! How can I assist you today?"
+    
+    elif user_input in ["thank you", "thanks", "thank you sylvia"]:
+        return "You're very welcome! I'm always happy to help."
+    
+    elif user_input in ["what can you do", "what are your features", "help"]:
+        return "I can send WhatsApp messages, open websites in Chrome, search the web, get Wikipedia information, open applications, and much more. Just ask me naturally!"
+    
+    elif user_input in ["what time is it", "current time", "time"]:
+        from datetime import datetime
+        current_time = datetime.now().strftime("%I:%M %p")
+        return f"The current time is {current_time}."
+    
+    elif user_input in ["what's the date", "today's date", "date"]:
+        from datetime import datetime
+        current_date = datetime.now().strftime("%B %d, %Y")
+        return f"Today is {current_date}."
+    
+    elif user_input in ["good job", "well done", "great work"]:
+        return "Thank you! I'm glad I could help you successfully."
+    
+    elif user_input in ["you're smart", "you're intelligent", "clever"]:
+        return "Thank you for the kind words! I try my best to be helpful and efficient."
+    
+    # Fun responses
+    elif user_input in ["tell me a joke", "joke", "make me laugh"]:
+        return "Why don't scientists trust atoms? Because they make up everything!"
+    
+    elif user_input in ["sing a song", "sing something"]:
+        return "I'm better at helping you with tasks than singing, but here's my attempt: 'I'm Sylvia, your assistant true, here to help with all you do!'"
+    
+    elif user_input in ["who is your creator", "who created you", "created you"]:
+        return "My creator is Rushi Banekar."
+    
+    # Word dictation feature
+    elif "write something in word" in user_input or "dictate to word" in user_input or "word dictation" in user_input:
+        return start_word_dictation()
+    
+    # Return None if no custom response found
+    return None
+
 def run_assistant():
     """Main loop for the voice assistant."""
     print("[INFO] Starting assistant...")
     speak(f"I am ready...")
     is_active = True  # Track if assistant is active or deactivated
     in_conversation = False  # Track if we're in continuous conversation mode
-    
+        
     while True:
         try:
             command = listen_for_command()
@@ -626,6 +811,12 @@ def run_assistant():
                     speak(custom_response)
                     continue
                 
+                # Handle Word dictation command
+                if "write something in word" in user_command or "dictate to word" in user_command or "word dictation" in user_command:
+                    result = start_word_dictation()
+                    speak(result)
+                    continue
+                
                 # Handle direct application opening commands without Gemini API
                 if user_command.startswith("open "):
                     app_name = user_command.replace("open ", "").strip()
@@ -649,27 +840,56 @@ def run_assistant():
                 
                 # Handle direct WhatsApp messaging commands without Gemini API
                 if "message" in user_command.lower() and "on whatsapp" in user_command.lower():
-                    # Parse command like "Message Prabhav hi on whatsapp"
-                    try:
-                        # Remove "message" and "on whatsapp" to extract contact and message
-                        command_clean = user_command.lower().replace("message ", "").replace(" on whatsapp", "").strip()
-                        
-                        # Split into words to find contact (first word) and message (remaining words)
-                        words = command_clean.split()
-                        if len(words) >= 2:
-                            contact = words[0].capitalize()  # Capitalize contact name
-                            message = " ".join(words[1:])    # Join remaining words as message
+                    # Check for interactive messaging pattern: "I want to send message to [contact] on whatsapp"
+                    if "i want to send message to" in user_command.lower():
+                        try:
+                            # Extract contact name from "I want to send message to [contact] on whatsapp"
+                            contact_part = user_command.lower().replace("i want to send message to ", "").replace(" on whatsapp", "").strip()
+                            contact = contact_part.capitalize()
                             
-                            speak(f"Sending message to {contact} on WhatsApp: {message}")
-                            result = send_whatsapp_message(contact, message)
-                            speak(result)
+                            if contact:
+                                speak(f"What message do you want to send to {contact}?")
+                                print(f"[INFO] Waiting for message to send to {contact}...")
+                                
+                                # Listen for the message content
+                                message_command = listen_for_command()
+                                
+                                if message_command not in ["no_speech_detected", "speech_unintelligible", "speech_service_error", "general_microphone_error"]:
+                                    speak(f"Sending message to {contact} on WhatsApp: {message_command}")
+                                    result = send_whatsapp_message(contact, message_command)
+                                    speak(result)
+                                else:
+                                    speak("I couldn't hear your message clearly. Please try again.")
+                                continue
+                            else:
+                                speak("Please specify a contact name. For example: I want to send message to Prabhav on WhatsApp")
+                                continue
+                        except Exception as e:
+                            speak("Sorry, I couldn't understand the contact name. Please try again.")
                             continue
-                        else:
-                            speak("Please specify both a contact name and message. For example: Message Prabhav hi on WhatsApp")
+                    
+                    # Handle direct messaging pattern: "Message Prabhav hi on whatsapp"
+                    else:
+                        try:
+                            # Remove "message" and "on whatsapp" to extract contact and message
+                            command_clean = user_command.lower().replace("message ", "").replace(" on whatsapp", "").strip()
+                            
+                            # Split into words to find contact (first word) and message (remaining words)
+                            words = command_clean.split()
+                            if len(words) >= 2:
+                                contact = words[0].capitalize()  # Capitalize contact name
+                                message = " ".join(words[1:])    # Join remaining words as message
+                                
+                                speak(f"Sending message to {contact} on WhatsApp: {message}")
+                                result = send_whatsapp_message(contact, message)
+                                speak(result)
+                                continue
+                            else:
+                                speak("Please specify both a contact name and message. For example: Message Prabhav hi on WhatsApp, or say: I want to send message to Prabhav on WhatsApp")
+                                continue
+                        except Exception as e:
+                            speak(f"Sorry, I couldn't parse the WhatsApp command. Please try again with format: Message contact name message on WhatsApp")
                             continue
-                    except Exception as e:
-                        speak(f"Sorry, I couldn't parse the WhatsApp command. Please try again with format: Message contact name message on WhatsApp")
-                        continue
                 
                 # Handle Chrome automation commands without Gemini API
                 if "chrome" in user_command.lower():
@@ -748,180 +968,10 @@ def run_assistant():
             sys.stdout.flush()
             speak("I encountered an unexpected error. Please try again.")
 
-# Flask API setup
-app = Flask(__name__)
-assistant_thread = None
-is_listening = False
-is_wake_word_detected = False
-interaction_history = []
 
-# API Routes
-@app.route('/api/start_listening', methods=['POST'])
-def start_listening_api():
-    global assistant_thread, is_listening
-    if assistant_thread is None or not assistant_thread.is_alive():
-        is_listening = True
-        assistant_thread = Thread(target=run_background_assistant)
-        assistant_thread.daemon = True
-        assistant_thread.start()
-        return jsonify({'status': 'started', 'message': 'Assistant started listening'})
-    return jsonify({'status': 'already_running', 'message': 'Assistant is already listening'})
 
-@app.route('/api/stop_listening', methods=['POST'])
-def stop_listening_api():
-    global is_listening
-    is_listening = False
-    return jsonify({'status': 'stopped', 'message': 'Assistant stopped listening'})
-
-@app.route('/api/interaction_history', methods=['GET'])
-def get_interaction_history_api():
-    return jsonify({'history': interaction_history})
-
-@app.route('/api/assistant_state', methods=['GET'])
-def get_assistant_state_api():
-    global is_listening
-    return jsonify({'is_listening': is_listening})
-
-@app.route('/api/speak', methods=['POST'])
-def speak_api():
-    data = request.get_json()
-    text = data.get('text', '')
-    if text:
-        speak(text)
-        return jsonify({'status': 'success', 'message': 'Text spoken'})
-    return jsonify({'status': 'error', 'message': 'No text provided'})
-
-@app.route('/api/get_ai_response', methods=['POST'])
-def get_ai_response_api():
-    data = request.get_json()
-    prompt = data.get('prompt', '')
-    if prompt:
-        response = get_ai_response(prompt)
-        return jsonify({'response': response})
-    return jsonify({'status': 'error', 'message': 'No prompt provided'})
-
-def run_background_assistant():
-    """Background assistant with wake word detection for API mode"""
-    pythoncom.CoInitialize()
-    global is_listening, interaction_history, is_wake_word_detected
-    try:
-        # 1. The "I am ready..." voice message starts here, before the recorder.
-        speak(f"I am ready. Listening for the wake word: 'Sylvia'.")
-        print("\n=== WAKE WORD DETECTION DEBUG ===")
-        print(f"Listening for the wake word: 'Sylvia'...")
-        
-        # List all available audio input devices
-        print("\n[DEBUG] Available audio input devices:")
-        devices = PvRecorder.get_audio_devices()
-        for idx, device in enumerate(devices):
-            print(f"  {idx}: {device}")
-        
-        # Print the Picovoice model file path
-        model_path = os.path.abspath('Sylvia_en_windows_v3_0_0.ppn')
-        print(f"\n[DEBUG] Using wake word model: {model_path}")
-        if not os.path.exists(model_path):
-            print("[ERROR] Wake word model file not found!")
-            speak("Error: Wake word model file not found.")
-            return
-        
-        try:
-            # The correct argument is keyword_paths, which takes a list.
-            porcupine = pvporcupine.create(
-                access_key=PICOVOICE_ACCESS_KEY,
-                keyword_paths=['Sylvia_en_windows_v3_0_0.ppn']
-            )
-            print("Successfully initialized Picovoice")
-            
-            # 2. Now, start the recorder after the initial voice message.
-            recorder = PvRecorder(
-                device_index=-1,  # -1 for default device
-                frame_length=porcupine.frame_length
-            )
-            print(f"Starting recorder with device index: {recorder.selected_device}")
-            recorder.start()
-            print("Recorder started successfully")
-            
-        except Exception as e:
-            print(f"Error initializing voice detection: {str(e)}")
-            speak("I'm having trouble with the microphone. Please check your audio settings.")
-            return
-        
-        print("\n[DEBUG] Starting wake word detection loop...")
-        print("[DEBUG] Speak the wake word 'Sylvia' to activate the assistant.")
-        
-        while is_listening:
-            pcm = recorder.read()
-            if not pcm:
-                print("[DEBUG] No audio data received from the microphone.")
-                continue
-                
-            keyword_index = porcupine.process(pcm)
-            
-            # Print audio level for debugging (optional)
-            rms = (sum(abs(sample) for sample in pcm) / len(pcm)) if pcm else 0
-            print(f"\r[DEBUG] Audio level: {rms:.1f} (speak louder if below 100)", end="", flush=True)
-            
-            if keyword_index >= 0:
-                print("\n[DEBUG] Wake word detected!")
-                print("\n=== WAKE WORD DETECTED ===")
-                try:
-                    is_wake_word_detected = True
-                    speak("Yes?")
-
-                    # --- Enter persistent command mode ---
-                    while is_listening:
-                        command = listen_for_command()
-                        if command in ["unknown_value", "request_error", "error"]:
-                            continue
-                        # Allow "exit", "bye", "goodbye", or "deactivate" to deactivate
-                        if any(word in command for word in ["exit", "bye", "goodbye", "deactivate"]):
-                            speak("Goodbye! I'll be here when you need me. Just say the wake word or 'activate' to bring me back.")
-                            break  # Exit persistent mode, return to wake word detection
-                        interaction_history.append({'role': 'user', 'content': command})
-                        response_data = get_ai_response(command)
-                        available_functions = {
-                            "open_application": open_application,
-                            "search_web": search_web,
-                            "get_wikipedia_info": get_wikipedia_info
-                        }
-                        if response_data.get("text"):
-                            response_text = response_data["text"]
-                            speak(response_text)
-                            interaction_history.append({'role': 'assistant', 'content': response_text})
-                        elif response_data.get("tool_call"):
-                            function_name = response_data["tool_call"]
-                            args = response_data["args"]
-                            if function_name in available_functions:
-                                interaction_history.append({'role': 'assistant', 'content': f"Calling tool: {function_name} with args: {args}"})
-                                available_functions[function_name](**args)
-                    break  # Exit outer while loop after persistent mode
-
-                except Exception as e:
-                    print(f"An error occurred after wake word detection: {e}")
-                    speak("I encountered an error. Please check the logs.")
-
-    except Exception as e:
-        print(f"An error occurred in the background assistant: {e}")
-        is_listening = False
-    finally:
-        if 'recorder' in locals() and recorder is not None:
-            recorder.stop()
-            recorder.delete()
-        if 'porcupine' in locals() and porcupine is not None:
-            porcupine.delete()
-
+# Console assistant functionality
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(description='Voice Assistant')
-    parser.add_argument('--mode', choices=['console', 'api'], default='console', 
-                       help='Run in console mode or API server mode')
-    parser.add_argument('--port', type=int, default=5001, 
-                       help='Port for API server (default: 5001)')
-    args = parser.parse_args()
-    
-    if args.mode == 'console':
-        print("[INFO] Starting assistant in console mode...")
-        run_assistant()
-    else:
-        print(f"[INFO] Starting assistant API server on port {args.port}...")
-        app.run(host='127.0.0.1', port=args.port, debug=False)
+    print("[INFO] Starting Sylvia Voice Assistant...")
+    sys.stdout.flush()
+    run_assistant()
