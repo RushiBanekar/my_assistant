@@ -79,59 +79,32 @@ WAKE_WORD = config.get("assistant", {}).get("wake_word", "sylvia").lower() # Ens
 VOICE_ID = config.get("assistant", {}).get("voice_id", None)
 MICROPHONE_ENERGY_THRESHOLD = config.get("assistant", {}).get("microphone_energy_threshold", 700) # Get from config
 
-# Initialize TTS engine
-engine = pyttsx3.init()
-if VOICE_ID:
-    print(f"[DEBUG] Attempting to set voice to ID from config: {VOICE_ID}")
-    sys.stdout.flush()
-    try:
-        engine.setProperty('voice', VOICE_ID)
-        current_voice = engine.getProperty('voice')
-        if current_voice != VOICE_ID:
-            print(f"[WARNING] Requested voice ID {VOICE_ID} was not fully set. Current voice: {current_voice}")
-            sys.stdout.flush()
-    except Exception as e:
-        print(f"[ERROR] Failed to set voice to {VOICE_ID}: {e}")
-        sys.stdout.flush()
-        print("[DEBUG] Falling back to default voice selection due to error.")
-        sys.stdout.flush()
-        VOICE_ID = None # Force fallback if setting fails
-if not VOICE_ID: # This block now runs if VOICE_ID was None initially or failed to set
-    voices = engine.getProperty('voices')
-    if voices:
-        print("[DEBUG] No specific VOICE_ID set or failed to set. Listing available voices:")
-        sys.stdout.flush()
-        en_voices = []
-        for i, voice in enumerate(voices):
-            # Check if voice.languages is not None and contains any string starting with 'en'
-            print(f"  Voice {i}: ID='{voice.id}', Name='{voice.name}', Languages='{voice.languages}'")
-            sys.stdout.flush()
-            if voice.languages and any(lang.lower().startswith('en') for lang in voice.languages):
-                en_voices.append(voice.id)
 
+def speak(text):
+    """Converts text to speech using the TTS engine and flushes output. TTS engine is initialized per call for reliability."""
+    import pyttsx3
+    print(f"Assistant: {text}")
+    sys.stdout.flush()
+    engine = pyttsx3.init()
+    voices = engine.getProperty('voices')
+    # Prefer configured voice, else prefer English/Zira, else fallback
+    selected_voice_id = None
+    if VOICE_ID:
+        try:
+            engine.setProperty('voice', VOICE_ID)
+            selected_voice_id = VOICE_ID
+        except Exception:
+            selected_voice_id = None
+    if not selected_voice_id and voices:
+        en_voices = [v.id for v in voices if v.languages and any(lang.lower().startswith('en') for lang in v.languages)]
         if en_voices:
-            # Prefer Zira if available and English, otherwise pick first English
             zira_voice_id = next((vid for vid in en_voices if "zira" in vid.lower()), None)
             if zira_voice_id:
                 engine.setProperty('voice', zira_voice_id)
-                print(f"[DEBUG] Selected Zira (English) voice: {zira_voice_id}")
-                sys.stdout.flush()
             else:
                 engine.setProperty('voice', en_voices[0])
-                print(f"[DEBUG] Selected first available English voice: {en_voices[0]}")
-                sys.stdout.flush()
         else:
-            engine.setProperty('voice', voices[0].id) # Fallback to first available voice
-            print(f"[DEBUG] No English voices found. Selected first available voice: {voices[0].id}")
-            sys.stdout.flush()
-    else:
-        print("No voices found. Text-to-speech might not work.")
-        sys.stdout.flush()
-
-def speak(text):
-    """Converts text to speech using the TTS engine and flushes output."""
-    print(f"Assistant: {text}")
-    sys.stdout.flush() # Ensure this message is displayed immediately
+            engine.setProperty('voice', voices[0].id)
     engine.say(text)
     engine.runAndWait()
 
