@@ -9,6 +9,7 @@ import pyautogui
 import time
 import os
 import platform
+import re
 import speech_recognition as sr
 import pyttsx3
 import json
@@ -67,15 +68,16 @@ def load_config():
         print("config.yaml not found. Please create one with at least 'wake_word'.")
         sys.stdout.flush()
         # Return a default config dictionary if file is not found
-        return {"assistant": {"wake_word": "sylvia", "microphone_energy_threshold": 700}}
+        return {"assistant": {"wake_word": "AIRIS", "microphone_energy_threshold": 700}}
     except yaml.YAMLError as e:
         print(f"Error parsing config.yaml: {e}")
         sys.stdout.flush()
         # Return a default config dictionary if parsing fails
-        return {"assistant": {"wake_word": "sylvia", "microphone_energy_threshold": 700}}
+        return {"assistant": {"wake_word": "AIRIS", "microphone_energy_threshold": 700}}
 
 config = load_config()
-WAKE_WORD = config.get("assistant", {}).get("wake_word", "sylvia").lower() # Ensure wake word is lowercased
+WAKE_WORD = config.get("assistant", {}).get("wake_word", "AIRIS").lower() # Ensure wake word is lowercased
+ALIAS_WAKE_WORDS = [WAKE_WORD, "iris"]  # Accept both 'airis' and 'iris' as wake words
 VOICE_ID = config.get("assistant", {}).get("voice_id", None)
 MICROPHONE_ENERGY_THRESHOLD = config.get("assistant", {}).get("microphone_energy_threshold", 700) # Get from config
 
@@ -117,19 +119,22 @@ def listen_for_command():
     try:
         with sr.Microphone() as source:
             # Only show initial message, not repeated ones
-            r.pause_threshold = 0.8
-            r.energy_threshold = MICROPHONE_ENERGY_THRESHOLD
+            r.pause_threshold = 1.2  # More forgiving for short pauses
+            r.energy_threshold = max(200, MICROPHONE_ENERGY_THRESHOLD - 100)  # Slightly lower threshold for softer voices
             r.dynamic_energy_threshold = True
             
-            # Quick calibration without message
-            r.adjust_for_ambient_noise(source, duration=0.3)
+            # Longer calibration for ambient noise
+            r.adjust_for_ambient_noise(source, duration=1.0)  # Increased to 1s
+            
+            # DEBUG: print actual recognized command before wake word logic
+            # (This will help user tune their mic if needed)
+
             
             try:
                 # Shorter timeout for better responsiveness in API mode
                 audio = r.listen(source, timeout=5, phrase_time_limit=8)
                 
                 command = r.recognize_google(audio, language='en-in').lower()
-                print(f"You said: {command}")
                 sys.stdout.flush()
                 return command
                 
@@ -641,37 +646,43 @@ tools = [
 if USE_GEMINI:
     model = genai.GenerativeModel('gemini-1.5-flash', tools=tools)
 
-def get_ai_response(prompt):
-    """Sends a user's prompt to AI API and gets a response, handling tool calls."""
+def get_ai_response(prompt, conversation_history=None):
+    """Sends a user's prompt to AI API and gets a response, handling tool calls. Uses conversation history for context."""
+    if conversation_history is None:
+        conversation_history = []
     try:
         if USE_OPENAI:
-            # Use OpenAI API (modern client)
             from openai import OpenAI
             client = OpenAI(api_key=OPENAI_API_KEY)
-            
+            messages = [
+                {"role": "system", "content": "You are AIRIS, a helpful and friendly voice assistant. Respond naturally and conversationally."}
+            ]
+            # Add conversation history
+            for entry in conversation_history:
+                messages.append({"role": "user", "content": entry['user']})
+                messages.append({"role": "assistant", "content": entry['assistant']})
+            # Add current prompt
+            messages.append({"role": "user", "content": prompt})
             response = client.chat.completions.create(
                 model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "You are Sylvia, a helpful and friendly voice assistant. Respond naturally and conversationally."},
-                    {"role": "user", "content": prompt}
-                ],
+                messages=messages,
                 max_tokens=150,
                 temperature=0.7
             )
-            
             text_response = response.choices[0].message.content.strip()
             print(f"[DEBUG] OpenAI response: {text_response}")
             sys.stdout.flush()
             return {"text": text_response}
-            
         elif USE_GEMINI:
-            # Use Gemini API
-            chat = model.start_chat(history=[
-                {"role": "user", "parts": [f"You are Sylvia, a helpful and friendly voice assistant. User: {prompt}"]}
-            ])
-            
+            # Gemini chat history format is different
+            chat_history = [
+                {"role": "user", "parts": ["You are AIRIS, a helpful and friendly voice assistant."]}
+            ]
+            for entry in conversation_history:
+                chat_history.append({"role": "user", "parts": [entry['user']]})
+                chat_history.append({"role": "model", "parts": [entry['assistant']]})
+            chat = model.start_chat(history=chat_history)
             response = chat.send_message(prompt)
-            
             if response.candidates and response.candidates[0].content.parts:
                 for part in response.candidates[0].content.parts:
                     if part.function_call:
@@ -680,7 +691,6 @@ def get_ai_response(prompt):
                         print(f"[DEBUG] Gemini recommended tool call: {function_name} with args: {function_args}")
                         sys.stdout.flush()
                         return {"tool_call": function_name, "args": function_args}
-                
                 text_response = response.candidates[0].content.parts[0].text
                 print(f"[DEBUG] Gemini response: {text_response}")
                 sys.stdout.flush()
@@ -690,9 +700,7 @@ def get_ai_response(prompt):
                 sys.stdout.flush()
                 return {"text": "I'm having trouble connecting to my brain (empty response). Please try again."}
         else:
-            # No API available - provide basic response
             return {"text": "I'm here to help! For advanced responses, please add an API key to your .env file."}
-
     except Exception as e:
         print(f"ERROR: AI API call failed: {e}")
         sys.stdout.flush()
@@ -710,12 +718,12 @@ def get_custom_response(user_input):
         return "I'm doing great! Ready to help you with anything you need."
     
     elif user_input in ["what's your name", "who are you", "what are you"]:
-        return "I'm Sylvia, your voice assistant. I can help you with WhatsApp messages, Chrome automation, web searches, and much more!"
+        return "I'm AIRIS, your voice assistant. I can help you with WhatsApp messages, Chrome automation, web searches, and much more!"
     
     elif user_input in ["good morning", "good afternoon", "good evening"]:
         return "Good day to you too! How can I assist you today?"
     
-    elif user_input in ["thank you", "thanks", "thank you sylvia"]:
+    elif user_input in ["thank you", "thanks", "thank you AIRIS"]:
         return "You're very welcome! I'm always happy to help."
     
     elif user_input in ["what can you do", "what are your features", "help"]:
@@ -742,7 +750,7 @@ def get_custom_response(user_input):
         return "Why don't scientists trust atoms? Because they make up everything!"
     
     elif user_input in ["sing a song", "sing something"]:
-        return "I'm better at helping you with tasks than singing, but here's my attempt: 'I'm Sylvia, your assistant true, here to help with all you do!'"
+        return "I'm better at helping you with tasks than singing, but here's my attempt: 'I'm AIRIS, your assistant true, here to help with all you do!'"
     
     elif user_input in ["who is your creator", "who created you", "created you"]:
         return "My creator is Rushi Banekar."
@@ -760,10 +768,21 @@ def run_assistant():
     speak(f"I am ready...")
     is_active = True  # Track if assistant is active or deactivated
     in_conversation = False  # Track if we're in continuous conversation mode
-        
+    whatsapp_pending_contact = None  # Tracks contact awaiting message
+    conversation_history = []  # Track user/assistant exchanges for memory
+
     while True:
         try:
             command = listen_for_command()
+
+            # Accept both 'airis' and 'iris' as the wake word
+            if command.strip().lower() in ALIAS_WAKE_WORDS:
+                # Always show AIRIS in terminal, regardless of what user said
+                print("You said: AIRIS")
+                sys.stdout.flush()
+                speak("Yes?")
+                in_conversation = True
+                continue
 
             if command in ["speech_unintelligible", "speech_service_error", "general_microphone_error", "no_speech_detected"]:
                 if command == "no_speech_detected":
@@ -804,40 +823,51 @@ def run_assistant():
             # If we're in conversation mode, process commands directly
             if in_conversation:
                 user_command = command
-                
+
+                # WhatsApp pending context: if set, treat this command as message for previous contact
+                if whatsapp_pending_contact:
+                    if user_command not in ["no_speech_detected", "speech_unintelligible", "speech_service_error", "general_microphone_error"]:
+                        speak(f"Sending message to {whatsapp_pending_contact} on WhatsApp: {user_command}")
+                        result = send_whatsapp_message(whatsapp_pending_contact, user_command)
+                        speak(result)
+                    else:
+                        speak("I couldn't hear your message clearly. Please try again.")
+                    whatsapp_pending_contact = None
+                    continue
+
                 # Check for custom predefined responses first
                 custom_response = get_custom_response(user_command)
                 if custom_response:
                     speak(custom_response)
                     continue
-                
+
                 # Handle Word dictation command
                 if "write something in word" in user_command or "dictate to word" in user_command or "word dictation" in user_command:
                     result = start_word_dictation()
                     speak(result)
                     continue
-                
+
                 # Handle direct application opening commands without Gemini API
                 if user_command.startswith("open "):
                     app_name = user_command.replace("open ", "").strip()
                     result = open_application(app_name)
                     speak(result)
                     continue
-                
+
                 # Handle direct web search commands without Gemini API
                 if user_command.startswith("search "):
                     query = user_command.replace("search ", "").strip()
                     result = search_web(query)
                     speak(result)
                     continue
-                
+
                 # Handle direct Wikipedia commands without Gemini API
                 if user_command.startswith("wikipedia ") or user_command.startswith("wiki "):
                     query = user_command.replace("wikipedia ", "").replace("wiki ", "").strip()
                     result = get_wikipedia_info(query)
                     speak(result)
                     continue
-                
+
                 # Handle direct WhatsApp messaging commands without Gemini API
                 if "message" in user_command.lower() and "on whatsapp" in user_command.lower():
                     # Check for interactive messaging pattern: "I want to send message to [contact] on whatsapp"
@@ -846,20 +876,11 @@ def run_assistant():
                             # Extract contact name from "I want to send message to [contact] on whatsapp"
                             contact_part = user_command.lower().replace("i want to send message to ", "").replace(" on whatsapp", "").strip()
                             contact = contact_part.capitalize()
-                            
+
                             if contact:
                                 speak(f"What message do you want to send to {contact}?")
                                 print(f"[INFO] Waiting for message to send to {contact}...")
-                                
-                                # Listen for the message content
-                                message_command = listen_for_command()
-                                
-                                if message_command not in ["no_speech_detected", "speech_unintelligible", "speech_service_error", "general_microphone_error"]:
-                                    speak(f"Sending message to {contact} on WhatsApp: {message_command}")
-                                    result = send_whatsapp_message(contact, message_command)
-                                    speak(result)
-                                else:
-                                    speak("I couldn't hear your message clearly. Please try again.")
+                                whatsapp_pending_contact = contact  # Set context for next command
                                 continue
                             else:
                                 speak("Please specify a contact name. For example: I want to send message to Prabhav on WhatsApp")
@@ -867,19 +888,19 @@ def run_assistant():
                         except Exception as e:
                             speak("Sorry, I couldn't understand the contact name. Please try again.")
                             continue
-                    
+
                     # Handle direct messaging pattern: "Message Prabhav hi on whatsapp"
                     else:
                         try:
                             # Remove "message" and "on whatsapp" to extract contact and message
                             command_clean = user_command.lower().replace("message ", "").replace(" on whatsapp", "").strip()
-                            
+
                             # Split into words to find contact (first word) and message (remaining words)
                             words = command_clean.split()
                             if len(words) >= 2:
                                 contact = words[0].capitalize()  # Capitalize contact name
                                 message = " ".join(words[1:])    # Join remaining words as message
-                                
+
                                 speak(f"Sending message to {contact} on WhatsApp: {message}")
                                 result = send_whatsapp_message(contact, message)
                                 speak(result)
@@ -890,7 +911,7 @@ def run_assistant():
                         except Exception as e:
                             speak(f"Sorry, I couldn't parse the WhatsApp command. Please try again with format: Message contact name message on WhatsApp")
                             continue
-                
+
                 # Handle Chrome automation commands without Gemini API
                 if "chrome" in user_command.lower():
                     # Open website in Chrome - "open youtube in chrome" or "go to facebook in chrome"
@@ -931,11 +952,21 @@ def run_assistant():
                         speak(result)
                         continue
                 
-                # Try Gemini API for other commands (will fallback gracefully if no API key)
-                response_data = get_ai_response(user_command)
+                # Try Gemini/OpenAI API for other commands (with conversation memory)
+                print(f"You said: {user_command}")
+                response_data = get_ai_response(user_command, conversation_history)
 
                 if response_data.get("text"):
-                    speak(response_data["text"])
+                        # Remove all Markdown asterisks, bold, and list formatting
+                        cleaned_text = re.sub(r'[\*\_\`\#\>\-]+', '', response_data["text"])
+                        cleaned_text = re.sub(r'\s*\n\s*', '\n', cleaned_text)  # Clean up newlines
+                        cleaned_text = re.sub(r' +', ' ', cleaned_text)  # Remove double spaces
+                        formatted_text = re.sub(r'([.!?])\s+', r'\1\n', cleaned_text)
+                        formatted_text = re.sub(r'\n+', '\n', formatted_text).strip()
+                        print(f"Assistant: {formatted_text}")
+                        speak(formatted_text)
+                        # Add this exchange to conversation history
+                        conversation_history.append({"user": user_command, "assistant": formatted_text})
                 elif response_data.get("tool_call"):
                     function_name = response_data["tool_call"]
                     args = response_data["args"]
@@ -943,9 +974,11 @@ def run_assistant():
                     if function_name == "get_wikipedia_info":
                         result = get_wikipedia_info(**args)
                         speak(result)
+                        conversation_history.append({"user": user_command, "assistant": result})
                     elif function_name == "search_web":
                         result = search_web(**args)
                         speak(result)
+                        conversation_history.append({"user": user_command, "assistant": result})
                     elif function_name == "open_application":
                         result = open_application(**args)
                         speak(result)
@@ -972,6 +1005,6 @@ def run_assistant():
 
 # Console assistant functionality
 if __name__ == "__main__":
-    print("[INFO] Starting Sylvia Voice Assistant...")
+    print("[INFO] Starting AIRIS Voice Assistant...")
     sys.stdout.flush()
     run_assistant()

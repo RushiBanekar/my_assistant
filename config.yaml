@@ -1,8 +1,9 @@
 assistant:
-  name: "Sylvia"
-  wake_word: "Sylvia" # Use one of the pre-trained keywords
+  name: "AIRIS"
+  wake_word: "AIRIS" # Use one of the pre-trained keywords
   voice_id: "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Speech\\Voices\\Tokens\\TTS_MS_EN-US_ZIRA_11.0"
   enable_learning: true
+  phrase_time_limit: 30   # Maximum seconds to listen for a command (increase if AIRIS cuts off early)
 
 # API keys are now stored in .env file for security
 # api_keys:
